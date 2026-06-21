@@ -18,6 +18,8 @@ let { data }: { data: PageData } = $props();
 
 let searchEl: SearchBar;
 let notFound = $state(false);
+let installPrompt = $state<Event & { prompt(): Promise<void> } | null>(null);
+let installed = $state(false);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let OverlayComponent = $state<Component<any> | null>(null);
 
@@ -68,6 +70,14 @@ onMount(() => {
 	catalog.loadFilters();
 	catalog.search(true);
 
+	const onBeforeInstall = (e: Event) => {
+		e.preventDefault();
+		installPrompt = e as Event & { prompt(): Promise<void> };
+	};
+	const onAppInstalled = () => { installed = true; installPrompt = null; };
+	window.addEventListener('beforeinstallprompt', onBeforeInstall);
+	window.addEventListener('appinstalled', onAppInstalled);
+
 	const handleKey = (e: KeyboardEvent) => {
 		if (
 			e.key === '/' &&
@@ -79,7 +89,11 @@ onMount(() => {
 		}
 	};
 	window.addEventListener('keydown', handleKey);
-	return () => window.removeEventListener('keydown', handleKey);
+	return () => {
+		window.removeEventListener('keydown', handleKey);
+		window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+		window.removeEventListener('appinstalled', onAppInstalled);
+	};
 });
 
 function onSearchChange(q: string) {
@@ -164,6 +178,15 @@ function zapPrev() {
 				<div class="flex-1">
 					<SearchBar bind:this={searchEl} value={catalog.filters.q} onchange={onSearchChange} />
 				</div>
+				{#if installPrompt && !installed}
+					<button
+						onclick={() => installPrompt?.prompt()}
+						style="flex-shrink:0; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-surface-raised); color: var(--color-text-muted); font-family: var(--font-sans); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer; white-space: nowrap; transition: color 0.15s, border-color 0.15s;"
+						aria-label="Install dtv app"
+					>
+						INSTALL
+					</button>
+				{/if}
 			</div>
 			<FilterBar
 				filters={{ country: catalog.filters.country, category: catalog.filters.category, language: catalog.filters.language }}
