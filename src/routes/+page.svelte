@@ -15,10 +15,32 @@
 	let searchEl: SearchBar;
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
+	// Holds the last channel object explicitly opened — ensures sports/featured
+	// channels not in the current catalog page can still be played.
+	let pinnedChannel = $state<Channel | null>(null);
+
 	const watchId = $derived($page.url.searchParams.get('watch'));
+
+	// Prefer a catalog hit (keeps data fresh), fall back to the pinned object,
+	// then try a direct API fetch for deep-links to channels outside the loaded page.
 	const watchingChannel = $derived(
-		watchId ? catalog.channels.find((c) => c.id === watchId) ?? null : null
+		watchId
+			? catalog.channels.find((c) => c.id === watchId) ??
+				(pinnedChannel?.id === watchId ? pinnedChannel : null)
+			: null
 	);
+
+	// When a watchId arrives with no match, fetch it directly.
+	$effect(() => {
+		if (!watchId) { pinnedChannel = null; return; }
+		if (catalog.channels.find((c) => c.id === watchId) || pinnedChannel?.id === watchId) return;
+		fetch(`/api/channels?watch=${encodeURIComponent(watchId)}`)
+			.then((r) => r.ok ? r.json() : null)
+			.then((d: { channel: Channel | null } | null) => {
+				if (d?.channel) pinnedChannel = d.channel;
+			})
+			.catch(() => {});
+	});
 
 	onMount(() => {
 		library.init();
@@ -50,6 +72,7 @@
 
 	function openPlayer(channel: Channel) {
 		library.addRecent(channel);
+		pinnedChannel = channel;
 		const u = new URL(window.location.href);
 		u.searchParams.set('watch', channel.id);
 		goto(u.toString(), { replaceState: false, noScroll: true });
@@ -64,15 +87,13 @@
 	function zapNext() {
 		if (!watchId) return;
 		const idx = catalog.channels.findIndex((c) => c.id === watchId);
-		const next = catalog.channels[idx + 1];
-		if (next) openPlayer(next);
+		if (idx !== -1 && catalog.channels[idx + 1]) openPlayer(catalog.channels[idx + 1]);
 	}
 
 	function zapPrev() {
 		if (!watchId) return;
 		const idx = catalog.channels.findIndex((c) => c.id === watchId);
-		const prev = catalog.channels[idx - 1];
-		if (prev) openPlayer(prev);
+		if (idx > 0) openPlayer(catalog.channels[idx - 1]);
 	}
 </script>
 
