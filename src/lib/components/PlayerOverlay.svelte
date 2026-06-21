@@ -2,6 +2,8 @@
 	import Hls from 'hls.js';
 	import type { Channel } from '$lib/types.js';
 	import EpgStrip from './EpgStrip.svelte';
+	import { acquireWakeLock, vibrate, requestFullscreen, isFullscreen, lockLandscape, unlockOrientation } from '$lib/utils/mobile.js';
+	import type { WakeLockHandle } from '$lib/utils/mobile.js';
 
 	type Props = {
 		channel: Channel;
@@ -14,25 +16,36 @@
 
 	let { channel, onclose, onnext, onprev, onfavorite, isFavorite }: Props = $props();
 
+	let overlayEl: HTMLDivElement;
 	let videoEl: HTMLVideoElement;
 	let hls: Hls | null = null;
 	let streamIndex = $state(0);
 	let status = $state<'loading' | 'playing' | 'error' | 'failed'>('loading');
 	let chromeVisible = $state(true);
+	let fullscreen = $state(false);
 	let hideTimer: ReturnType<typeof setTimeout> | null = null;
+	let wakeLock: WakeLockHandle | null = null;
+
+	// touch tracking
+	let touchStartX = 0;
+	let touchStartY = 0;
+	let touchStartTime = 0;
+	let touchStartVol = 0;
+	let isSeeking = $state(false);
+	let volumeIndicator = $state<number | null>(null);
+	let volIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
+	let swipeHint = $state<'left' | 'right' | null>(null);
 
 	const activeStream = $derived(channel.streams[streamIndex] ?? null);
 
+	// ── Playback ──────────────────────────────────────────────────────────────
+
 	function loadStream(idx: number) {
 		const stream = channel.streams[idx];
-		if (!stream) {
-			status = 'failed';
-			return;
-		}
+		if (!stream) { status = 'failed'; return; }
 
 		status = 'loading';
 		streamIndex = idx;
-
 		hls?.destroy();
 		hls = null;
 
@@ -55,17 +68,11 @@
 			});
 		} else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
 			videoEl.src = stream.url;
-			videoEl
-				.play()
-				.then(() => {
-					status = 'playing';
-				})
+			videoEl.play()
+				.then(() => { status = 'playing'; })
 				.catch(() => {
-					if (streamIndex + 1 < channel.streams.length) {
-						loadStream(streamIndex + 1);
-					} else {
-						status = 'failed';
-					}
+					if (streamIndex + 1 < channel.streams.length) loadStream(streamIndex + 1);
+					else status = 'failed';
 				});
 		} else {
 			status = 'failed';
@@ -75,61 +82,142 @@
 	$effect(() => {
 		if (!videoEl) return;
 		loadStream(0);
+		acquireWakeLock().then((h) => { wakeLock = h; });
 		return () => {
 			hls?.destroy();
 			hls = null;
+			wakeLock?.release();
+			if (fullscreen && isFullscreen()) document.exitFullscreen?.().catch(() => {});
+			unlockOrientation();
 		};
 	});
 
 	let channelIdHistory = $state<string[]>([]);
-
 	$effect(() => {
 		const id = channel.id;
 		const last = channelIdHistory[channelIdHistory.length - 1];
 		if (id !== last) {
 			channelIdHistory = [...channelIdHistory, id];
-			if (channelIdHistory.length > 1) {
+			if (channelIdHistory.length > 1 && videoEl) {
 				streamIndex = 0;
-				if (videoEl) loadStream(0);
+				loadStream(0);
 			}
 		}
 	});
 
-	function scheduleChromeHide() {
+	// ── Chrome auto-hide ──────────────────────────────────────────────────────
+
+	function scheduleChromeHide(delay = 4000) {
 		if (hideTimer) clearTimeout(hideTimer);
-		hideTimer = setTimeout(() => {
-			chromeVisible = false;
-		}, 3000);
+		hideTimer = setTimeout(() => { chromeVisible = false; }, delay);
 	}
 
-	function showChrome() {
+	function showChrome(autoHide = true) {
 		chromeVisible = true;
-		scheduleChromeHide();
+		if (autoHide) scheduleChromeHide();
 	}
 
 	$effect(() => {
 		scheduleChromeHide();
-		return () => {
-			if (hideTimer) clearTimeout(hideTimer);
-		};
+		return () => { if (hideTimer) clearTimeout(hideTimer); };
 	});
 
-	function handleMousemove() {
-		showChrome();
+	// ── Fullscreen ────────────────────────────────────────────────────────────
+
+	async function toggleFullscreen() {
+		await requestFullscreen(overlayEl);
+		fullscreen = isFullscreen();
+		if (fullscreen) {
+			await lockLandscape();
+		} else {
+			unlockOrientation();
+		}
 	}
 
-	function handleBottomEnter() {
-		chromeVisible = true;
-		if (hideTimer) clearTimeout(hideTimer);
+	function handleFullscreenChange() {
+		fullscreen = isFullscreen();
+		if (!fullscreen) unlockOrientation();
 	}
 
-	function handleBottomLeave() {
-		scheduleChromeHide();
+	// ── Touch gestures ────────────────────────────────────────────────────────
+
+	const SWIPE_THRESHOLD = 55;
+	const TAP_MAX_MOVE = 12;
+	const TAP_MAX_MS = 300;
+
+	function handleTouchStart(e: TouchEvent) {
+		const t = e.touches[0];
+		touchStartX = t.clientX;
+		touchStartY = t.clientY;
+		touchStartTime = Date.now();
+		touchStartVol = videoEl?.volume ?? 1;
+		isSeeking = false;
 	}
+
+	function handleTouchMove(e: TouchEvent) {
+		const t = e.touches[0];
+		const dx = t.clientX - touchStartX;
+		const dy = t.clientY - touchStartY;
+
+		// Vertical swipe on right half = volume
+		if (Math.abs(dy) > 20 && Math.abs(dy) > Math.abs(dx) * 1.5 && touchStartX > window.innerWidth * 0.5) {
+			e.preventDefault();
+			isSeeking = true;
+			const deltaVol = -(dy / 150);
+			const newVol = Math.max(0, Math.min(1, touchStartVol + deltaVol));
+			if (videoEl) videoEl.volume = newVol;
+			volumeIndicator = Math.round(newVol * 100);
+			if (volIndicatorTimer) clearTimeout(volIndicatorTimer);
+			volIndicatorTimer = setTimeout(() => { volumeIndicator = null; }, 1200);
+		}
+
+		// Horizontal swipe hint
+		if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+			swipeHint = dx < 0 ? 'left' : 'right';
+		} else {
+			swipeHint = null;
+		}
+	}
+
+	function handleTouchEnd(e: TouchEvent) {
+		const t = e.changedTouches[0];
+		const dx = t.clientX - touchStartX;
+		const dy = t.clientY - touchStartY;
+		const dt = Date.now() - touchStartTime;
+		swipeHint = null;
+
+		if (isSeeking) { isSeeking = false; return; }
+
+		const moved = Math.hypot(dx, dy);
+
+		// Tap — toggle chrome
+		if (moved < TAP_MAX_MOVE && dt < TAP_MAX_MS) {
+			if (chromeVisible) {
+				chromeVisible = false;
+				if (hideTimer) clearTimeout(hideTimer);
+			} else {
+				showChrome();
+			}
+			return;
+		}
+
+		// Horizontal swipe — channel zap
+		if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.5) {
+			vibrate(18);
+			if (dx < 0) {
+				onnext();
+			} else {
+				onprev();
+			}
+		}
+	}
+
+	// ── Keyboard ──────────────────────────────────────────────────────────────
 
 	function handleKeydown(e: KeyboardEvent) {
 		switch (e.key) {
 			case 'Escape':
+				if (fullscreen && isFullscreen()) { document.exitFullscreen?.(); return; }
 				onclose();
 				break;
 			case 'ArrowLeft':
@@ -144,6 +232,10 @@
 			case 'F':
 				onfavorite(channel.id);
 				break;
+			case ' ':
+				e.preventDefault();
+				showChrome();
+				break;
 		}
 	}
 
@@ -151,19 +243,24 @@
 		if (!activeStream) return '';
 		if (activeStream.quality) return activeStream.quality.toUpperCase();
 		if (activeStream.label) return activeStream.label;
-		return `Stream ${streamIndex + 1}`;
+		return `${streamIndex + 1}/${channel.streams.length}`;
 	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onfullscreenchange={handleFullscreenChange} />
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
+	bind:this={overlayEl}
 	class="overlay"
 	role="dialog"
 	aria-label="Video player"
 	aria-modal="true"
 	tabindex="-1"
-	onmousemove={handleMousemove}
+	onmousemove={() => showChrome()}
+	ontouchstart={handleTouchStart}
+	ontouchmove={handleTouchMove}
+	ontouchend={handleTouchEnd}
 >
 	<video
 		bind:this={videoEl}
@@ -173,16 +270,42 @@
 		muted={false}
 	></video>
 
-	{#if status === 'loading'}
-		<div class="status-layer" aria-live="polite">
-			<div class="spinner" aria-hidden="true"></div>
-			<span class="status-text">Loading stream...</span>
+	<!-- Volume indicator -->
+	{#if volumeIndicator !== null}
+		<div class="vol-indicator" aria-live="polite" aria-atomic="true">
+			<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				{#if volumeIndicator === 0}
+					<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+				{:else if volumeIndicator < 50}
+					<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+				{:else}
+					<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+				{/if}
+			</svg>
+			<span>{volumeIndicator}%</span>
+			<div class="vol-bar">
+				<div class="vol-fill" style="width:{volumeIndicator}%"></div>
+			</div>
 		</div>
 	{/if}
 
-	{#if status === 'error'}
+	<!-- Swipe hint arrows -->
+	{#if swipeHint === 'left'}
+		<div class="swipe-hint right" aria-hidden="true">
+			<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+			<span>Next</span>
+		</div>
+	{:else if swipeHint === 'right'}
+		<div class="swipe-hint left" aria-hidden="true">
+			<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+			<span>Prev</span>
+		</div>
+	{/if}
+
+	{#if status === 'loading'}
 		<div class="status-layer" aria-live="polite">
-			<span class="status-text">Stream unavailable — trying next...</span>
+			<div class="spinner" aria-hidden="true"></div>
+			<span class="status-text">Loading stream…</span>
 		</div>
 	{/if}
 
@@ -194,14 +317,17 @@
 		</div>
 	{/if}
 
+	<!-- Tap-to-toggle hint shown briefly when chrome hides -->
+
+	<!-- Bottom chrome -->
 	<div
 		class="chrome"
 		class:hidden={!chromeVisible}
 		role="toolbar"
 		aria-label="Player controls"
-		tabindex="-1"
-		onmouseenter={handleBottomEnter}
-		onmouseleave={handleBottomLeave}
+		onmouseenter={() => { chromeVisible = true; if (hideTimer) clearTimeout(hideTimer); }}
+		onmouseleave={() => scheduleChromeHide()}
+		ontouchstart={(e) => { e.stopPropagation(); chromeVisible = true; if (hideTimer) clearTimeout(hideTimer); }}
 	>
 		<div class="glass-dark chrome-inner">
 			<div class="channel-info">
@@ -214,7 +340,6 @@
 						</span>
 					{/if}
 				</div>
-
 				<div class="meta-row">
 					<span class="flag">{channel.countryFlag}</span>
 					{#if channel.categories.length > 0}
@@ -224,17 +349,12 @@
 						<span class="quality-badge">{qualityLabel()}</span>
 					{/if}
 				</div>
-
 				<EpgStrip channelId={channel.id} />
 			</div>
 
 			<div class="controls">
-				<button
-					class="ctrl-btn"
-					aria-label="Previous channel"
-					onclick={onprev}
-				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<button class="ctrl-btn" aria-label="Previous channel" onclick={onprev}>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<polyline points="15 18 9 12 15 6"/>
 					</svg>
 				</button>
@@ -243,35 +363,43 @@
 					class="ctrl-btn"
 					class:fav-active={isFavorite}
 					aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-					onclick={() => onfavorite(channel.id)}
+					onclick={() => { onfavorite(channel.id); vibrate(10); }}
 				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
 						<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
 					</svg>
 				</button>
 
-				<button
-					class="ctrl-btn"
-					aria-label="Next channel"
-					onclick={onnext}
-				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<button class="ctrl-btn" aria-label="Next channel" onclick={onnext}>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<polyline points="9 18 15 12 9 6"/>
 					</svg>
 				</button>
 
-				<button
-					class="ctrl-btn close-ctrl"
-					aria-label="Close player"
-					onclick={onclose}
-				>
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<line x1="18" y1="6" x2="6" y2="18"/>
-						<line x1="6" y1="6" x2="18" y2="18"/>
+				<button class="ctrl-btn" aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onclick={toggleFullscreen}>
+					{#if fullscreen}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2 2v3"/>
+						</svg>
+					{:else}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+						</svg>
+					{/if}
+				</button>
+
+				<button class="ctrl-btn close-ctrl" aria-label="Close player" onclick={onclose}>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
 					</svg>
 				</button>
 			</div>
 		</div>
+	</div>
+
+	<!-- Mobile tap-zone hint: tap = show/hide chrome -->
+	<div class="tap-hint" class:visible={!chromeVisible} aria-hidden="true">
+		Tap to show controls
 	</div>
 </div>
 
@@ -284,6 +412,9 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		touch-action: none;
+		user-select: none;
+		-webkit-user-select: none;
 	}
 
 	.video {
@@ -295,6 +426,7 @@
 		background: black;
 	}
 
+	/* ── Status layers ── */
 	.status-layer {
 		position: absolute;
 		inset: 0;
@@ -309,7 +441,7 @@
 
 	.status-layer.failed {
 		pointer-events: auto;
-		background: rgba(0, 0, 0, 0.75);
+		background: rgba(0, 0, 0, 0.80);
 	}
 
 	.spinner {
@@ -321,9 +453,7 @@
 		animation: spin 0.8s linear infinite;
 	}
 
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
+	@keyframes spin { to { transform: rotate(360deg); } }
 
 	.status-text {
 		font-size: 14px;
@@ -333,7 +463,7 @@
 	}
 
 	.failed-title {
-		font-size: clamp(1.25rem, 3vw, 2rem);
+		font-size: clamp(1.25rem, 5vw, 2rem);
 		font-weight: 900;
 		color: var(--color-text);
 		letter-spacing: -0.02em;
@@ -350,8 +480,8 @@
 
 	.close-btn-inline {
 		margin-top: 8px;
-		padding: 8px 24px;
-		border-radius: 6px;
+		padding: 10px 28px;
+		border-radius: 8px;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface);
 		color: var(--color-text);
@@ -362,27 +492,90 @@
 		transition: background 0.15s;
 	}
 
-	.close-btn-inline:hover {
-		background: var(--color-surface-raised);
+	.close-btn-inline:hover, .close-btn-inline:active { background: var(--color-surface-raised); }
+
+	/* ── Volume indicator ── */
+	.vol-indicator {
+		position: absolute;
+		top: 50%;
+		right: 20px;
+		transform: translateY(-50%);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		z-index: 30;
+		color: white;
+		font-size: 13px;
+		font-weight: 700;
+		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(8px);
+		-webkit-backdrop-filter: blur(8px);
+		border-radius: 12px;
+		padding: 12px 14px;
+		pointer-events: none;
+		min-width: 64px;
 	}
 
+	.vol-bar {
+		width: 48px;
+		height: 3px;
+		background: rgba(255, 255, 255, 0.2);
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.vol-fill {
+		height: 100%;
+		background: white;
+		border-radius: 2px;
+		transition: width 0.05s;
+	}
+
+	/* ── Swipe hint ── */
+	.swipe-hint {
+		position: absolute;
+		top: 50%;
+		transform: translateY(-50%);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		z-index: 30;
+		color: rgba(255, 255, 255, 0.7);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		pointer-events: none;
+		animation: hint-fade 0.15s ease-out;
+	}
+
+	.swipe-hint.left { left: 24px; }
+	.swipe-hint.right { right: 24px; }
+
+	@keyframes hint-fade {
+		from { opacity: 0; transform: translateY(-50%) scale(0.85); }
+		to { opacity: 1; transform: translateY(-50%) scale(1); }
+	}
+
+	/* ── Chrome ── */
 	.chrome {
 		position: absolute;
 		bottom: 0;
 		left: 0;
 		right: 0;
 		z-index: 20;
-		transition: opacity 0.3s, transform 0.3s;
+		transition: opacity 0.25s, transform 0.25s;
 	}
 
 	.chrome.hidden {
 		opacity: 0;
-		transform: translateY(8px);
+		transform: translateY(6px);
 		pointer-events: none;
 	}
 
 	.chrome-inner {
-		padding: 20px 24px 24px;
+		padding: 20px 20px 24px;
 		display: flex;
 		align-items: flex-end;
 		justify-content: space-between;
@@ -404,7 +597,7 @@
 	}
 
 	.channel-name {
-		font-size: clamp(1.25rem, 3.5vw, 2rem);
+		font-size: clamp(1.1rem, 4vw, 2rem);
 		font-weight: 900;
 		color: var(--color-text);
 		letter-spacing: -0.03em;
@@ -432,10 +625,7 @@
 		flex-wrap: wrap;
 	}
 
-	.flag {
-		font-size: 16px;
-		line-height: 1;
-	}
+	.flag { font-size: 16px; line-height: 1; }
 
 	.controls {
 		display: flex;
@@ -448,8 +638,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 40px;
-		height: 40px;
+		width: 44px;
+		height: 44px;
 		border-radius: 8px;
 		border: 1px solid rgba(255, 255, 255, 0.08);
 		background: rgba(255, 255, 255, 0.06);
@@ -457,41 +647,69 @@
 		cursor: pointer;
 		transition: background 0.15s, color 0.15s;
 		padding: 0;
+		-webkit-tap-highlight-color: transparent;
 	}
 
-	.ctrl-btn:hover {
-		background: rgba(255, 255, 255, 0.12);
+	.ctrl-btn:hover, .ctrl-btn:active {
+		background: rgba(255, 255, 255, 0.14);
 		color: var(--color-text);
 	}
 
-	.ctrl-btn.fav-active {
-		color: var(--color-live);
+	.ctrl-btn.fav-active { color: var(--color-live); }
+	.close-ctrl { margin-left: 4px; }
+
+	/* ── Tap hint ── */
+	.tap-hint {
+		position: absolute;
+		bottom: 20px;
+		left: 50%;
+		transform: translateX(-50%);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		color: rgba(255, 255, 255, 0.35);
+		pointer-events: none;
+		opacity: 0;
+		transition: opacity 0.4s;
 	}
 
-	.close-ctrl {
-		margin-left: 8px;
-	}
+	.tap-hint.visible { opacity: 1; }
 
-	@media (max-width: 480px) {
+	/* ── Mobile overrides ── */
+	@media (max-width: 600px) {
 		.chrome-inner {
 			flex-direction: column;
 			align-items: flex-start;
-			padding: 16px;
+			padding: 14px 16px 20px;
+			gap: 12px;
 		}
 
 		.controls {
-			align-self: flex-end;
+			align-self: stretch;
+			justify-content: space-between;
+		}
+
+		.ctrl-btn {
+			flex: 1;
+			height: 48px;
+			border-radius: 10px;
+		}
+
+		.channel-name {
+			font-size: clamp(1rem, 5vw, 1.5rem);
 		}
 	}
 
-	@media (prefers-reduced-motion: reduce) {
-		.spinner {
-			animation: none;
-			border-top-color: var(--color-text);
+	@media (max-height: 500px) and (orientation: landscape) {
+		.chrome-inner {
+			padding: 10px 20px 14px;
 		}
+	}
 
-		.chrome {
-			transition: none;
-		}
+	/* ── Reduced motion ── */
+	@media (prefers-reduced-motion: reduce) {
+		.spinner { animation: none; border-top-color: var(--color-text); }
+		.chrome { transition: none; }
+		.tap-hint { transition: none; }
 	}
 </style>
