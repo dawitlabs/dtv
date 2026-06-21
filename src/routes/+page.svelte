@@ -9,6 +9,7 @@
 	import ChannelGrid from '$lib/components/ChannelGrid.svelte';
 	import PlayerOverlay from '$lib/components/PlayerOverlay.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import SportsSection from '$lib/components/SportsSection.svelte';
 	import type { Channel } from '$lib/types';
 
 	let searchEl: SearchBar;
@@ -148,6 +149,21 @@
 				{/each}
 			</div>
 		</section>
+	{/if}
+
+	<!-- Sports & Football section (hidden when any filter/search is active) -->
+	{#if !catalog.filters.q && !catalog.filters.country && !catalog.filters.category && !catalog.filters.language}
+		<div class="mx-auto max-w-7xl">
+			<SportsSection
+				onplay={openPlayer}
+				onfavorite={(id) => library.toggleFavorite(id)}
+				favorites={library.favorites}
+				onseeall={() => {
+					catalog.filters.category = 'sports';
+					catalog.search(true);
+				}}
+			/>
+		</div>
 	{/if}
 
 	<!-- Channel grid -->
