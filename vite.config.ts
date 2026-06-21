@@ -31,10 +31,23 @@ export default defineConfig({
 				]
 			},
 			workbox: {
-				globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-				navigateFallback: '/offline',
-				additionalManifestEntries: [{ url: '/offline', revision: null }],
+				globPatterns: ['**/*.{js,css,woff2}'],
 				runtimeCaching: [
+					{
+						// Navigation (HTML pages) — network-first; offline page on failure
+						urlPattern: ({ request }) => request.mode === 'navigate',
+						handler: 'NetworkFirst',
+						options: {
+							cacheName: 'pages-cache',
+							networkTimeoutSeconds: 5,
+							plugins: [
+								{
+									handlerDidError: async () =>
+										Response.redirect('/offline', 302),
+								},
+							],
+						},
+					},
 					{
 						urlPattern: /^\/api\//,
 						handler: 'NetworkFirst',
