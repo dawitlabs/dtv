@@ -35,13 +35,6 @@ class CatalogState {
 		}
 	}
 
-	constructor() {
-		$effect(() => {
-			playlists.items.length; // track
-			if (this.filterOptions) this.loadFilters();
-		});
-	}
-
 	async search(reset = false): Promise<void> {
 		if (this.debounceTimer !== null) {
 			clearTimeout(this.debounceTimer);
