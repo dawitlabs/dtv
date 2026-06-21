@@ -177,7 +177,7 @@ function zapPrev() {
 			<div class="flex items-center gap-4">
 				<a
 					href="/"
-					class="font-black tracking-tight text-[var(--color-text)] no-underline"
+					class="font-black tracking-tight text-[var(--color-text)] no-underline sidebar-hidden"
 					style="font-size: clamp(1.4rem, 4vw, 2rem); letter-spacing: -0.04em;"
 				>
 					dtv
