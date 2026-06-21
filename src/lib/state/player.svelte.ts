@@ -21,6 +21,12 @@ class PlayerState {
 	hasNext = $derived(this.index >= 0 && this.index < this.liveQueue.length - 1);
 	hasPrev = $derived(this.index > 0);
 
+	sleepTimerEnd = $state(0);
+	sleepTimerLeft = $derived(
+		this.sleepTimerEnd > 0 ? Math.max(0, Math.ceil((this.sleepTimerEnd - Date.now()) / 60000)) : 0,
+	);
+	private _sleepTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
+
 	open(ch: Channel, queue: Channel[], source: QueueSource): void {
 		this.source = source;
 		if (source === 'catalog') {
@@ -67,6 +73,27 @@ class PlayerState {
 	close(): void {
 		this.queue = [];
 		this.index = -1;
+		if (this._sleepTimeout) {
+			clearTimeout(this._sleepTimeout);
+			this._sleepTimeout = undefined;
+			this.sleepTimerEnd = 0;
+		}
+	}
+
+	setSleepTimer(minutes: number): void {
+		if (this.sleepTimerEnd) {
+			clearTimeout(this._sleepTimeout);
+			this._sleepTimeout = undefined;
+		}
+		if (minutes <= 0) {
+			this.sleepTimerEnd = 0;
+			return;
+		}
+		this.sleepTimerEnd = Date.now() + minutes * 60 * 1000;
+		this._sleepTimeout = setTimeout(() => {
+			this.close();
+			this.sleepTimerEnd = 0;
+		}, minutes * 60 * 1000);
 	}
 }
 

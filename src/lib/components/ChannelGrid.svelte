@@ -4,6 +4,7 @@ import type { Snippet } from 'svelte';
 import { untrack } from 'svelte';
 import type { Channel } from '$lib/types.js';
 import ChannelCard from './ChannelCard.svelte';
+import { spatialNav } from '$lib/actions/spatialNav.js';
 
 type Props = {
 	channels: Channel[];
@@ -106,6 +107,7 @@ $effect(() => {
 {:else}
 	<div
 		bind:this={gridEl}
+		use:spatialNav
 		style="position: relative; height: {$virtualizer.getTotalSize()}px;"
 	>
 		{#each $virtualizer.getVirtualItems() as vrow (vrow.key)}

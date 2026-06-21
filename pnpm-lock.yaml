@@ -17,6 +17,9 @@ importers:
       hls.js:
         specifier: ^1.6.1
         version: 1.6.16
+      workbox-window:
+        specifier: ^7.4.1
+        version: 7.4.1
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.0.6

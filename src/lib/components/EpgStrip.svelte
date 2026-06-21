@@ -20,7 +20,11 @@ function formatTime(iso: string): string {
 	return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-const now = Date.now();
+let now = $state(Date.now());
+$effect(() => {
+	const interval = setInterval(() => { now = Date.now() }, 60000)
+	return () => clearInterval(interval)
+});
 
 const current = $derived(
 	programs.find(

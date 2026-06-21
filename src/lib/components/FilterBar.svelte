@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { FilterOptions } from '$lib/types.js';
+import { spatialNav } from '$lib/actions/spatialNav.js';
 
 type Filters = {
 	country: string;
@@ -35,7 +36,7 @@ function setLanguage(e: Event) {
 </script>
 
 <div class="filter-bar">
-	<div class="category-strip" role="group" aria-label="Filter by category">
+	<div class="category-strip" use:spatialNav role="group" aria-label="Filter by category">
 		{#if options === null}
 			{#each { length: 5 } as _}
 				<div class="chip-skeleton"></div>

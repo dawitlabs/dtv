@@ -1,5 +1,6 @@
 <script lang="ts">
 import { focusTrap } from '$lib/actions/focusTrap.js';
+import { player } from '$lib/state/player.svelte.js';
 import type { Channel } from '$lib/types.js';
 import type { WakeLockHandle } from '$lib/utils/mobile.js';
 import {
@@ -58,6 +59,10 @@ let paused = $state(false);
 let muted = $state(false);
 let volume = $state(1);
 
+let showQualityMenu = $state(false);
+let manualPick = $state(false);
+let airplayAvailable = $state(false);
+
 // touch tracking
 let touchStartX = 0;
 let touchStartY = 0;
@@ -90,7 +95,7 @@ async function loadStream(idx: number) {
 			status = 'playing';
 			paused = false;
 		} catch {
-			if (idx + 1 < channel.streams.length) {
+			if (!manualPick && idx + 1 < channel.streams.length) {
 				loadStream(idx + 1);
 				return;
 			}
@@ -116,7 +121,7 @@ async function loadStream(idx: number) {
 		});
 		hls.on(H.Events.ERROR, (_evt: unknown, data: { fatal: boolean }) => {
 			if (data.fatal) {
-				if (streamIndex + 1 < channel.streams.length)
+				if (!manualPick && streamIndex + 1 < channel.streams.length)
 					loadStream(streamIndex + 1);
 				else status = 'failed';
 			}
@@ -148,10 +153,17 @@ $effect(() => {
 	videoEl.addEventListener('pause', onVideoPause);
 	videoEl.addEventListener('volumechange', onVideoVolumeChange);
 
+	function onAirplayAvailability(e: Event) {
+		const ev = e as Event & { availability: string };
+		airplayAvailable = ev.availability === 'available';
+	}
+	videoEl.addEventListener('webkitplaybacktargetavailabilitychanged', onAirplayAvailability);
+
 	return () => {
 		videoEl.removeEventListener('play', onVideoPlay);
 		videoEl.removeEventListener('pause', onVideoPause);
 		videoEl.removeEventListener('volumechange', onVideoVolumeChange);
+		videoEl.removeEventListener('webkitplaybacktargetavailabilitychanged', onAirplayAvailability);
 		hls?.destroy();
 		hls = null;
 		wakeLock?.release();
@@ -170,6 +182,7 @@ $effect(() => {
 		if (channelIdHistory.length > 1 && videoEl) {
 			streamIndex = 0;
 			paused = false;
+			manualPick = false;
 			loadStream(0);
 		}
 	}
@@ -376,6 +389,17 @@ function handleKeydown(e: KeyboardEvent) {
 	}
 }
 
+$effect(() => {
+	if (!showQualityMenu) return;
+	function onDocClick() {
+		showQualityMenu = false;
+	}
+	document.addEventListener('click', onDocClick, { capture: true });
+	return () => {
+		document.removeEventListener('click', onDocClick, { capture: true });
+	};
+});
+
 function qualityLabel(): string {
 	if (!activeStream) return '';
 	if (activeStream.quality) return activeStream.quality.toUpperCase();
@@ -406,6 +430,7 @@ function qualityLabel(): string {
 		playsinline
 		autoplay
 		muted={false}
+		{...{"x-webkit-airplay": "allow"}}
 	></video>
 
 	<!-- Volume indicator -->
@@ -477,6 +502,9 @@ function qualityLabel(): string {
 							LIVE
 						</span>
 					{/if}
+					{#if player.sleepTimerLeft > 0}
+						<span class="sleep-pill">⏱ {player.sleepTimerLeft}m</span>
+					{/if}
 				</div>
 				<div class="meta-row">
 					<span class="flag">{channel.countryFlag}</span>
@@ -533,6 +561,55 @@ function qualityLabel(): string {
 				{#if 'pictureInPictureEnabled' in document}
 					<button class="ctrl-btn" aria-label="Picture in picture" onclick={requestPiP}>
 						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1"/></svg>
+					</button>
+				{/if}
+
+				{#if channel.streams.length > 1}
+					<div class="quality-picker-wrap">
+						<button
+							class="ctrl-btn quality-btn"
+							aria-label="Select stream quality"
+							onclick={() => { showQualityMenu = !showQualityMenu; }}
+						>
+							<span class="quality-btn-label">{qualityLabel()}</span>
+						</button>
+						{#if showQualityMenu}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="quality-menu glass-dark-menu"
+								onmousedown={(e) => e.stopPropagation()}
+							>
+								{#each channel.streams as s, i}
+									<button
+										class="quality-menu-item"
+										class:active={streamIndex === i}
+										onclick={() => {
+											manualPick = true;
+											loadStream(i);
+											showQualityMenu = false;
+										}}
+									>
+										<span>{s.quality ? s.quality.toUpperCase() : s.label ?? `${i + 1}/${channel.streams.length}`}</span>
+										{#if streamIndex === i}
+											<span class="quality-check">&#10003;</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+
+				{#if airplayAvailable}
+					<button
+						class="ctrl-btn"
+						aria-label="AirPlay"
+						onclick={() => (videoEl as HTMLVideoElement & { webkitShowPlaybackTargetPicker(): void }).webkitShowPlaybackTargetPicker()}
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2"/>
+							<polygon points="12 15 17 21 7 21 12 15"/>
+						</svg>
 					</button>
 				{/if}
 
@@ -891,6 +968,83 @@ function qualityLabel(): string {
 		.chrome-inner {
 			padding: 10px 20px 14px;
 		}
+	}
+
+	/* ── Sleep pill ── */
+	.sleep-pill {
+		display: inline-flex;
+		align-items: center;
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		color: var(--color-text-muted);
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 999px;
+		padding: 2px 8px;
+		flex-shrink: 0;
+	}
+
+	/* ── Quality picker ── */
+	.quality-picker-wrap {
+		position: relative;
+	}
+
+	.quality-btn {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		width: auto;
+		padding: 0 10px;
+		min-width: 44px;
+	}
+
+	.quality-btn-label {
+		white-space: nowrap;
+	}
+
+	.quality-menu {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		right: 0;
+		min-width: 120px;
+		border-radius: 10px;
+		overflow: hidden;
+		z-index: 40;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.quality-menu-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 10px 14px;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--color-text-muted);
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		transition: background 0.12s, color 0.12s;
+		white-space: nowrap;
+	}
+
+	.quality-menu-item:hover,
+	.quality-menu-item:active {
+		background: rgba(255, 255, 255, 0.08);
+		color: var(--color-text);
+	}
+
+	.quality-menu-item.active {
+		color: var(--color-text);
+	}
+
+	.quality-check {
+		color: var(--color-live);
+		font-size: 14px;
 	}
 
 	/* ── Reduced motion ── */

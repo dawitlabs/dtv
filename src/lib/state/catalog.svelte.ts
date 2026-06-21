@@ -1,4 +1,5 @@
 import type { CatalogFilters, Channel, FilterOptions } from '$lib/types.js';
+import { playlists } from './playlists.svelte.js';
 
 class CatalogState {
 	filters = $state<CatalogFilters>({
@@ -23,6 +24,22 @@ class CatalogState {
 		const res = await fetch('/api/filters');
 		if (!res.ok) return;
 		this.filterOptions = (await res.json()) as FilterOptions;
+		if (playlists.allChannels.length > 0) {
+			this.filterOptions = {
+				...this.filterOptions,
+				categories: [
+					{ id: 'custom', name: 'My channels', count: playlists.allChannels.length },
+					...this.filterOptions.categories,
+				],
+			};
+		}
+	}
+
+	constructor() {
+		$effect(() => {
+			playlists.items.length; // track
+			if (this.filterOptions) this.loadFilters();
+		});
 	}
 
 	async search(reset = false): Promise<void> {
@@ -69,6 +86,7 @@ class CatalogState {
 					this.channels = [...this.channels, ...data.channels];
 				}
 				this.total = data.total;
+				this.mergeCustom();
 			} catch (err) {
 				if (err instanceof DOMException && err.name === 'AbortError') return;
 				this.error =
@@ -85,6 +103,25 @@ class CatalogState {
 			}, 200);
 		} else {
 			await run();
+		}
+	}
+
+	private mergeCustom(): void {
+		if (playlists.items.length === 0) return;
+		const f = this.filters;
+		let custom = playlists.allChannels;
+		if (f.q) {
+			const q = f.q.toLowerCase();
+			custom = custom.filter(c => c.name.toLowerCase().includes(q));
+		}
+		if (f.category && f.category !== 'custom') custom = custom.filter(c => c.categories.includes(f.category));
+		if (f.country) custom = custom.filter(c => c.country === f.country);
+		if (f.language) custom = custom.filter(c => c.languages.includes(f.language));
+		const existingIds = new Set(this.channels.map(c => c.id));
+		const fresh = custom.filter(c => !existingIds.has(c.id));
+		if (fresh.length > 0) {
+			this.channels = [...fresh, ...this.channels];
+			this.total = this.total + fresh.length;
 		}
 	}
 

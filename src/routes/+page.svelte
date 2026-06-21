@@ -20,6 +20,8 @@ let searchEl: SearchBar;
 let notFound = $state(false);
 let installPrompt = $state<Event & { prompt(): Promise<void> } | null>(null);
 let installed = $state(false);
+let updateAvailable = $state(false);
+let doUpdate: (() => Promise<void>) | undefined;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let OverlayComponent = $state<Component<any> | null>(null);
 
@@ -69,6 +71,11 @@ onMount(() => {
 	library.init();
 	catalog.loadFilters();
 	catalog.search(true);
+
+	// PWA update detection
+	import('virtual:pwa-register').then(({ registerSW }) => {
+		doUpdate = registerSW({ onNeedRefresh() { updateAvailable = true; } });
+	}).catch(() => {});
 
 	const onBeforeInstall = (e: Event) => {
 		e.preventDefault();
@@ -178,6 +185,15 @@ function zapPrev() {
 				<div class="flex-1">
 					<SearchBar bind:this={searchEl} value={catalog.filters.q} onchange={onSearchChange} />
 				</div>
+				{#if updateAvailable}
+					<button
+						onclick={() => doUpdate?.()}
+						style="flex-shrink:0; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--color-text-muted); background: var(--color-surface-raised); color: var(--color-text); font-family: var(--font-sans); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer; white-space: nowrap; transition: color 0.15s, border-color 0.15s;"
+						aria-label="Update dtv app"
+					>
+						UPDATE
+					</button>
+				{/if}
 				{#if installPrompt && !installed}
 					<button
 						onclick={() => installPrompt?.prompt()}

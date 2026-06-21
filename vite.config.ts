@@ -25,7 +25,9 @@ export default defineConfig({
 				],
 				shortcuts: [
 					{ name: 'Sports', short_name: 'Sports', url: '/?category=sports', description: 'Live sports channels' },
-					{ name: 'News', short_name: 'News', url: '/?category=news', description: 'Live news channels' }
+					{ name: 'News', short_name: 'News', url: '/?category=news', description: 'Live news channels' },
+					{ name: 'TV Guide', short_name: 'Guide', url: '/guide', description: 'TV program guide' },
+					{ name: 'Multi-view', short_name: 'Multi', url: '/multi', description: 'Watch multiple channels' }
 				]
 			},
 			workbox: {
