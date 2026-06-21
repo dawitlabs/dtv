@@ -2,7 +2,7 @@
 	"$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
 	"files": {
-		"includes": ["**", "!**/*.css", "!.svelte-kit/**", "!build/**", "!node_modules/**"]
+		"includes": ["**", "!**/*.css", "!**/*.svelte", "!.svelte-kit/**", "!build/**", "!node_modules/**"]
 	},
 	"formatter": {
 		"enabled": true,
