@@ -1,7 +1,12 @@
-import type { Channel, CatalogFilters, FilterOptions } from '$lib/types.js';
+import type { CatalogFilters, Channel, FilterOptions } from '$lib/types.js';
 
 class CatalogState {
-	filters = $state<CatalogFilters>({ q: '', country: '', category: '', language: '' });
+	filters = $state<CatalogFilters>({
+		q: '',
+		country: '',
+		category: '',
+		language: '',
+	});
 	channels = $state<Channel[]>([]);
 	total = $state(0);
 	page = $state(0);
@@ -52,7 +57,11 @@ class CatalogState {
 
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-				const data = (await res.json()) as { channels: Channel[]; total: number; page: number };
+				const data = (await res.json()) as {
+					channels: Channel[];
+					total: number;
+					page: number;
+				};
 
 				if (reset) {
 					this.channels = data.channels;
@@ -62,7 +71,8 @@ class CatalogState {
 				this.total = data.total;
 			} catch (err) {
 				if (err instanceof DOMException && err.name === 'AbortError') return;
-				this.error = err instanceof Error ? err.message : 'Failed to load channels';
+				this.error =
+					err instanceof Error ? err.message : 'Failed to load channels';
 			} finally {
 				this.loading = false;
 			}

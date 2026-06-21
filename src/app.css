@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;900&display=swap');
+@import '@fontsource-variable/archivo';
 @import "tailwindcss";
 
 @theme {
@@ -23,7 +23,7 @@
   --color-text-dim: oklch(0.35 0 0);
   --color-live: oklch(0.63 0.22 28);
 
-  --font-sans: 'Archivo', system-ui, sans-serif;
+  --font-sans: 'Archivo Variable', system-ui, sans-serif;
 }
 
 *,

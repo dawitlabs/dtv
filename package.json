@@ -15,7 +15,8 @@
 	},
 	"dependencies": {
 		"hls.js": "^1.6.1",
-		"@tanstack/svelte-virtual": "^3.13.29"
+		"@tanstack/svelte-virtual": "^3.13.29",
+		"@fontsource-variable/archivo": "^5.2.5"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-vercel": "^5.7.2",

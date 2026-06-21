@@ -53,8 +53,7 @@ class LibraryState {
 		try {
 			localStorage.setItem(FAVORITES_KEY, JSON.stringify([...this.favorites]));
 			localStorage.setItem(RECENTS_KEY, JSON.stringify(this.recents));
-		} catch {
-		}
+		} catch {}
 	}
 }
 

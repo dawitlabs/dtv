@@ -44,7 +44,12 @@ type RawChannel = {
 };
 
 type RawCategory = { id: string; name: string; description: string };
-type RawCountry = { code: string; name: string; languages: string[]; flag: string };
+type RawCountry = {
+	code: string;
+	name: string;
+	languages: string[];
+	flag: string;
+};
 type RawLanguage = { code: string; name: string; native_name: string };
 type RawGuide = {
 	channel: string;
@@ -73,25 +78,32 @@ function qualityRank(q: string | null): number {
 	return idx === -1 ? QUALITY_ORDER.length : idx;
 }
 
-export async function getCatalog(): Promise<{ channels: Channel[]; meta: CatalogMeta }> {
+export async function getCatalog(): Promise<{
+	channels: Channel[];
+	meta: CatalogMeta;
+}> {
 	if (cache && Date.now() - cache.ts < TTL) {
 		return { channels: cache.data, meta: cache.meta };
 	}
 
-	const [streams, rawChannels, categories, countries, languages, guides] = await Promise.all([
-		fetchJson<RawStream[]>('https://iptv-org.github.io/api/streams.json'),
-		fetchJson<RawChannel[]>('https://iptv-org.github.io/api/channels.json'),
-		fetchJson<RawCategory[]>('https://iptv-org.github.io/api/categories.json'),
-		fetchJson<RawCountry[]>('https://iptv-org.github.io/api/countries.json'),
-		fetchJson<RawLanguage[]>('https://iptv-org.github.io/api/languages.json'),
-		fetchJson<RawGuide[]>('https://iptv-org.github.io/api/guides.json'),
-	]);
+	const [streams, rawChannels, categories, countries, languages, guides] =
+		await Promise.all([
+			fetchJson<RawStream[]>('https://iptv-org.github.io/api/streams.json'),
+			fetchJson<RawChannel[]>('https://iptv-org.github.io/api/channels.json'),
+			fetchJson<RawCategory[]>(
+				'https://iptv-org.github.io/api/categories.json',
+			),
+			fetchJson<RawCountry[]>('https://iptv-org.github.io/api/countries.json'),
+			fetchJson<RawLanguage[]>('https://iptv-org.github.io/api/languages.json'),
+			fetchJson<RawGuide[]>('https://iptv-org.github.io/api/guides.json'),
+		]);
 
 	const channelMap = new Map<string, RawChannel>();
 	for (const ch of rawChannels) channelMap.set(ch.id, ch);
 
 	const countryMeta = new Map<string, { flag: string; languages: string[] }>();
-	for (const c of countries) countryMeta.set(c.code, { flag: c.flag, languages: c.languages });
+	for (const c of countries)
+		countryMeta.set(c.code, { flag: c.flag, languages: c.languages });
 
 	const guideMap = new Map<string, string[]>();
 	for (const g of guides) {
@@ -129,9 +141,9 @@ export async function getCatalog(): Promise<{ channels: Channel[]; meta: Catalog
 
 		const meta = countryMeta.get(ch.country);
 
-		const sorted = channelStreams.slice().sort(
-			(a, b) => qualityRank(a.quality) - qualityRank(b.quality),
-		);
+		const sorted = channelStreams
+			.slice()
+			.sort((a, b) => qualityRank(a.quality) - qualityRank(b.quality));
 
 		channels.push({
 			id: ch.id,
@@ -141,14 +153,22 @@ export async function getCatalog(): Promise<{ channels: Channel[]; meta: Catalog
 			categories: ch.categories,
 			languages: meta?.languages ?? [],
 			logo: ch.logo ?? null,
-			streams: sorted.map((s) => ({ url: s.url, quality: s.quality, label: s.label })),
+			streams: sorted.map((s) => ({
+				url: s.url,
+				quality: s.quality,
+				label: s.label,
+			})),
 			guideIds: guideMap.get(channelId) ?? [],
 		});
 	}
 
 	const meta: CatalogMeta = {
 		categories: categories.map((c) => ({ id: c.id, name: c.name })),
-		countries: countries.map((c) => ({ code: c.code, name: c.name, flag: c.flag })),
+		countries: countries.map((c) => ({
+			code: c.code,
+			name: c.name,
+			flag: c.flag,
+		})),
 		languages: languages.map((l) => ({ code: l.code, name: l.name })),
 	};
 

@@ -1,23 +1,23 @@
 <script lang="ts">
-	type Props = {
-		value: string;
-		onchange: (v: string) => void;
-		autofocus?: boolean;
-	};
+type Props = {
+	value: string;
+	onchange: (v: string) => void;
+	autofocus?: boolean;
+};
 
-	let { value, onchange, autofocus = false }: Props = $props();
+let { value, onchange, autofocus = false }: Props = $props();
 
-	let inputEl: HTMLInputElement;
+let inputEl: HTMLInputElement;
 
-	export function focus() {
-		inputEl?.focus();
+export function focus() {
+	inputEl?.focus();
+}
+
+$effect(() => {
+	if (autofocus && inputEl) {
+		inputEl.focus();
 	}
-
-	$effect(() => {
-		if (autofocus && inputEl) {
-			inputEl.focus();
-		}
-	});
+});
 </script>
 
 <div class="search-wrap">

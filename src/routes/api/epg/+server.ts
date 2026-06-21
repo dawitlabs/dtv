@@ -19,33 +19,50 @@ export const GET: RequestHandler = async ({ url }) => {
 
 	const { channels } = await getCatalog();
 	const channel = channels.find((c) => c.id === channelId);
-	if (!channel || channel.guideIds.length === 0) return json({ programs: [] });
-
-	const siteId = channel.guideIds[0];
-
-	let data: RawEpgFile;
-	try {
-		const res = await fetch(
-			`https://iptv-org.github.io/epg/guides/${siteId}.json`,
-			{ next: { revalidate: 3600 * 6 } } as RequestInit,
+	if (!channel || channel.guideIds.length === 0) {
+		return json(
+			{ programs: [] },
+			{ headers: { 'Cache-Control': 'public, s-maxage=21600' } },
 		);
-		if (!res.ok) return json({ programs: [] });
-		data = (await res.json()) as RawEpgFile;
-	} catch {
-		return json({ programs: [] });
 	}
 
 	const now = Date.now();
-	const upcoming = (data.programs ?? [])
-		.filter((p) => new Date(p.stop).getTime() > now)
-		.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-		.slice(0, 3)
-		.map((p) => ({
-			title: p.title,
-			start: p.start,
-			stop: p.stop,
-			description: p.description ?? null,
-		}));
+	const FETCH_OPTS = { next: { revalidate: 3600 * 6 } } as RequestInit;
 
-	return json({ programs: upcoming });
+	for (const siteId of channel.guideIds) {
+		let data: RawEpgFile;
+		try {
+			const res = await fetch(
+				`https://iptv-org.github.io/epg/guides/${siteId}.json`,
+				FETCH_OPTS,
+			);
+			if (!res.ok) continue;
+			data = (await res.json()) as RawEpgFile;
+		} catch {
+			continue;
+		}
+
+		const upcoming = (data.programs ?? [])
+			.filter((p) => new Date(p.stop).getTime() > now)
+			.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+			.slice(0, 3)
+			.map((p) => ({
+				title: p.title,
+				start: p.start,
+				stop: p.stop,
+				description: p.description ?? null,
+			}));
+
+		if (upcoming.length > 0) {
+			return json(
+				{ programs: upcoming },
+				{ headers: { 'Cache-Control': 'public, s-maxage=21600' } },
+			);
+		}
+	}
+
+	return json(
+		{ programs: [] },
+		{ headers: { 'Cache-Control': 'public, s-maxage=21600' } },
+	);
 };

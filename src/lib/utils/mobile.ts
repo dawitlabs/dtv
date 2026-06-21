@@ -3,7 +3,11 @@ export type WakeLockHandle = { release: () => void };
 export async function acquireWakeLock(): Promise<WakeLockHandle | null> {
 	if (!('wakeLock' in navigator)) return null;
 	try {
-		const sentinel = await (navigator as Navigator & { wakeLock: { request(t: string): Promise<{ release(): Promise<void> }> } }).wakeLock.request('screen');
+		const sentinel = await (
+			navigator as Navigator & {
+				wakeLock: { request(t: string): Promise<{ release(): Promise<void> }> };
+			}
+		).wakeLock.request('screen');
 		return { release: () => sentinel.release().catch(() => {}) };
 	} catch {
 		return null;
@@ -35,13 +39,22 @@ export async function requestFullscreen(el: HTMLElement): Promise<void> {
 	}
 	if (el.requestFullscreen) {
 		await el.requestFullscreen().catch(() => {});
-	} else if ((el as HTMLElement & { webkitRequestFullscreen?(): void }).webkitRequestFullscreen) {
-		(el as HTMLElement & { webkitRequestFullscreen(): void }).webkitRequestFullscreen();
+	} else if (
+		(el as HTMLElement & { webkitRequestFullscreen?(): void })
+			.webkitRequestFullscreen
+	) {
+		(
+			el as HTMLElement & { webkitRequestFullscreen(): void }
+		).webkitRequestFullscreen();
 	}
 }
 
 export function isFullscreen(): boolean {
-	return !!document.fullscreenElement || !!(document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+	return (
+		!!document.fullscreenElement ||
+		!!(document as Document & { webkitFullscreenElement?: Element })
+			.webkitFullscreenElement
+	);
 }
 
 export function isMobile(): boolean {

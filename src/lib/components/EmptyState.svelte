@@ -1,10 +1,10 @@
 <script lang="ts">
-	type Props = {
-		message: string;
-		sub?: string | null;
-	};
+type Props = {
+	message: string;
+	sub?: string | null;
+};
 
-	let { message, sub = null }: Props = $props();
+let { message, sub = null }: Props = $props();
 </script>
 
 <div class="empty">

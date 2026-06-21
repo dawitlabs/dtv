@@ -26,15 +26,27 @@ export const GET: RequestHandler = async () => {
 
 	const countries = meta.countries
 		.filter((c) => countryCounts.has(c.code))
-		.map((c) => ({ code: c.code, name: c.name, flag: c.flag, count: countryCounts.get(c.code)! }))
+		.map((c) => ({
+			code: c.code,
+			name: c.name,
+			flag: c.flag,
+			count: countryCounts.get(c.code)!,
+		}))
 		.sort((a, b) => a.name.localeCompare(b.name));
 
 	const languages = meta.languages
 		.filter((l) => languageCounts.has(l.code))
-		.map((l) => ({ code: l.code, name: l.name, count: languageCounts.get(l.code)! }))
+		.map((l) => ({
+			code: l.code,
+			name: l.name,
+			count: languageCounts.get(l.code)!,
+		}))
 		.sort((a, b) => a.name.localeCompare(b.name));
 
-	return json({ categories, countries, languages }, {
-		headers: { 'Cache-Control': 'public, s-maxage=21600' },
-	});
+	return json(
+		{ categories, countries, languages },
+		{
+			headers: { 'Cache-Control': 'public, s-maxage=21600' },
+		},
+	);
 };

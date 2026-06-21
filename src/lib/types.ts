@@ -28,3 +28,6 @@ export type FilterOptions = {
 	countries: { code: string; name: string; flag: string; count: number }[];
 	languages: { code: string; name: string; count: number }[];
 };
+
+export type HomeRow = { id: string; title: string; channels: Channel[] };
+export type HomeResponse = { hero: Channel | null; rows: HomeRow[] };

@@ -10,9 +10,12 @@ export const GET: RequestHandler = async ({ url }) => {
 	const watch = url.searchParams.get('watch');
 	if (watch) {
 		const channel = channels.find((c) => c.id === watch) ?? null;
-		return json({ channel }, {
-			headers: { 'Cache-Control': 'public, s-maxage=21600' },
-		});
+		return json(
+			{ channel },
+			{
+				headers: { 'Cache-Control': 'public, s-maxage=21600' },
+			},
+		);
 	}
 
 	const q = url.searchParams.get('q')?.toLowerCase() ?? null;
@@ -25,13 +28,18 @@ export const GET: RequestHandler = async ({ url }) => {
 
 	if (q) filtered = filtered.filter((c) => c.name.toLowerCase().includes(q));
 	if (country) filtered = filtered.filter((c) => c.country === country);
-	if (category) filtered = filtered.filter((c) => c.categories.includes(category));
-	if (language) filtered = filtered.filter((c) => c.languages.includes(language));
+	if (category)
+		filtered = filtered.filter((c) => c.categories.includes(category));
+	if (language)
+		filtered = filtered.filter((c) => c.languages.includes(language));
 
 	const total = filtered.length;
 	const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-	return json({ channels: paged, total, page }, {
-		headers: { 'Cache-Control': 'public, s-maxage=21600' },
-	});
+	return json(
+		{ channels: paged, total, page },
+		{
+			headers: { 'Cache-Control': 'public, s-maxage=21600' },
+		},
+	);
 };

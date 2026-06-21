@@ -1,250 +1,387 @@
 <script lang="ts">
-	import Hls from 'hls.js';
-	import type { Channel } from '$lib/types.js';
-	import EpgStrip from './EpgStrip.svelte';
-	import { acquireWakeLock, vibrate, requestFullscreen, isFullscreen, lockLandscape, unlockOrientation } from '$lib/utils/mobile.js';
-	import type { WakeLockHandle } from '$lib/utils/mobile.js';
+import { focusTrap } from '$lib/actions/focusTrap.js';
+import type { Channel } from '$lib/types.js';
+import type { WakeLockHandle } from '$lib/utils/mobile.js';
+import {
+	acquireWakeLock,
+	isFullscreen,
+	lockLandscape,
+	requestFullscreen,
+	unlockOrientation,
+	vibrate,
+} from '$lib/utils/mobile.js';
+import EpgStrip from './EpgStrip.svelte';
 
-	type Props = {
-		channel: Channel;
-		onclose: () => void;
-		onnext: () => void;
-		onprev: () => void;
-		onfavorite: (id: string) => void;
-		isFavorite: boolean;
-	};
+type HlsConstructor = typeof import('hls.js').default;
+type HlsInstance = InstanceType<HlsConstructor>;
+let HlsCtor: HlsConstructor | null = null;
+let hls: HlsInstance | null = null;
 
-	let { channel, onclose, onnext, onprev, onfavorite, isFavorite }: Props = $props();
+async function ensureHls(): Promise<HlsConstructor | null> {
+	if (HlsCtor) return HlsCtor;
+	HlsCtor = (await import('hls.js')).default;
+	return HlsCtor;
+}
 
-	let overlayEl: HTMLDivElement;
-	let videoEl: HTMLVideoElement;
-	let hls: Hls | null = null;
-	let streamIndex = $state(0);
-	let status = $state<'loading' | 'playing' | 'error' | 'failed'>('loading');
-	let chromeVisible = $state(true);
-	let fullscreen = $state(false);
-	let hideTimer: ReturnType<typeof setTimeout> | null = null;
-	let wakeLock: WakeLockHandle | null = null;
+type Props = {
+	channel: Channel;
+	onclose: () => void;
+	onnext: () => void;
+	onprev: () => void;
+	onfavorite: (id: string) => void;
+	isFavorite: boolean;
+	hasNext?: boolean;
+	hasPrev?: boolean;
+};
 
-	// touch tracking
-	let touchStartX = 0;
-	let touchStartY = 0;
-	let touchStartTime = 0;
-	let touchStartVol = 0;
-	let isSeeking = $state(false);
-	let volumeIndicator = $state<number | null>(null);
-	let volIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
-	let swipeHint = $state<'left' | 'right' | null>(null);
+let {
+	channel,
+	onclose,
+	onnext,
+	onprev,
+	onfavorite,
+	isFavorite,
+	hasNext = true,
+	hasPrev = true,
+}: Props = $props();
 
-	const activeStream = $derived(channel.streams[streamIndex] ?? null);
+let overlayEl: HTMLDivElement;
+let videoEl: HTMLVideoElement;
+let streamIndex = $state(0);
+let status = $state<'loading' | 'playing' | 'error' | 'failed'>('loading');
+let chromeVisible = $state(true);
+let fullscreen = $state(false);
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeLock: WakeLockHandle | null = null;
 
-	// ── Playback ──────────────────────────────────────────────────────────────
+let paused = $state(false);
+let muted = $state(false);
+let volume = $state(1);
 
-	function loadStream(idx: number) {
-		const stream = channel.streams[idx];
-		if (!stream) { status = 'failed'; return; }
+// touch tracking
+let touchStartX = 0;
+let touchStartY = 0;
+let touchStartTime = 0;
+let touchStartVol = 0;
+let isSeeking = $state(false);
+let volumeIndicator = $state<number | null>(null);
+let volIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
+let swipeHint = $state<'left' | 'right' | null>(null);
 
-		status = 'loading';
-		streamIndex = idx;
-		hls?.destroy();
-		hls = null;
+const activeStream = $derived(channel.streams[streamIndex] ?? null);
 
-		if (Hls.isSupported()) {
-			hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-			hls.loadSource(stream.url);
-			hls.attachMedia(videoEl);
-			hls.on(Hls.Events.MANIFEST_PARSED, () => {
-				videoEl.play().catch(() => {});
-				status = 'playing';
-			});
-			hls.on(Hls.Events.ERROR, (_evt, data) => {
-				if (data.fatal) {
-					if (streamIndex + 1 < channel.streams.length) {
-						loadStream(streamIndex + 1);
-					} else {
-						status = 'failed';
-					}
-				}
-			});
-		} else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-			videoEl.src = stream.url;
-			videoEl.play()
-				.then(() => { status = 'playing'; })
-				.catch(() => {
-					if (streamIndex + 1 < channel.streams.length) loadStream(streamIndex + 1);
-					else status = 'failed';
-				});
-		} else {
+// ── Playback ──────────────────────────────────────────────────────────────
+
+async function loadStream(idx: number) {
+	const stream = channel.streams[idx];
+	if (!stream) {
+		status = 'failed';
+		return;
+	}
+	status = 'loading';
+	streamIndex = idx;
+	hls?.destroy();
+	hls = null;
+
+	if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+		videoEl.src = stream.url;
+		try {
+			await videoEl.play();
+			status = 'playing';
+			paused = false;
+		} catch {
+			if (idx + 1 < channel.streams.length) {
+				loadStream(idx + 1);
+				return;
+			}
 			status = 'failed';
 		}
+		return;
 	}
 
-	$effect(() => {
-		if (!videoEl) return;
-		loadStream(0);
-		acquireWakeLock().then((h) => { wakeLock = h; });
-		return () => {
-			hls?.destroy();
-			hls = null;
-			wakeLock?.release();
-			if (fullscreen && isFullscreen()) document.exitFullscreen?.().catch(() => {});
-			unlockOrientation();
-		};
-	});
+	const H = await ensureHls();
+	if (!H) {
+		status = 'failed';
+		return;
+	}
 
-	let channelIdHistory = $state<string[]>([]);
-	$effect(() => {
-		const id = channel.id;
-		const last = channelIdHistory[channelIdHistory.length - 1];
-		if (id !== last) {
-			channelIdHistory = [...channelIdHistory, id];
-			if (channelIdHistory.length > 1 && videoEl) {
-				streamIndex = 0;
-				loadStream(0);
+	if (H.isSupported()) {
+		hls = new H({ enableWorker: true, lowLatencyMode: true });
+		hls.loadSource(stream.url);
+		hls.attachMedia(videoEl);
+		hls.on(H.Events.MANIFEST_PARSED, () => {
+			videoEl.play().catch(() => {});
+			status = 'playing';
+			paused = false;
+		});
+		hls.on(H.Events.ERROR, (_evt: unknown, data: { fatal: boolean }) => {
+			if (data.fatal) {
+				if (streamIndex + 1 < channel.streams.length)
+					loadStream(streamIndex + 1);
+				else status = 'failed';
 			}
-		}
+		});
+	} else {
+		status = 'failed';
+	}
+}
+
+$effect(() => {
+	if (!videoEl) return;
+	loadStream(0);
+	acquireWakeLock().then((h) => {
+		wakeLock = h;
 	});
 
-	// ── Chrome auto-hide ──────────────────────────────────────────────────────
+	function onVideoPlay() {
+		paused = false;
+	}
+	function onVideoPause() {
+		paused = true;
+	}
+	function onVideoVolumeChange() {
+		volume = videoEl.volume;
+		muted = videoEl.muted;
+	}
 
-	function scheduleChromeHide(delay = 4000) {
+	videoEl.addEventListener('play', onVideoPlay);
+	videoEl.addEventListener('pause', onVideoPause);
+	videoEl.addEventListener('volumechange', onVideoVolumeChange);
+
+	return () => {
+		videoEl.removeEventListener('play', onVideoPlay);
+		videoEl.removeEventListener('pause', onVideoPause);
+		videoEl.removeEventListener('volumechange', onVideoVolumeChange);
+		hls?.destroy();
+		hls = null;
+		wakeLock?.release();
+		if (fullscreen && isFullscreen())
+			document.exitFullscreen?.().catch(() => {});
+		unlockOrientation();
+	};
+});
+
+let channelIdHistory = $state<string[]>([]);
+$effect(() => {
+	const id = channel.id;
+	const last = channelIdHistory[channelIdHistory.length - 1];
+	if (id !== last) {
+		channelIdHistory = [...channelIdHistory, id];
+		if (channelIdHistory.length > 1 && videoEl) {
+			streamIndex = 0;
+			paused = false;
+			loadStream(0);
+		}
+	}
+});
+
+// ── Chrome auto-hide ──────────────────────────────────────────────────────
+
+function scheduleChromeHide(delay = 4000) {
+	if (hideTimer) clearTimeout(hideTimer);
+	hideTimer = setTimeout(() => {
+		chromeVisible = false;
+	}, delay);
+}
+
+function showChrome(autoHide = true) {
+	chromeVisible = true;
+	if (autoHide) scheduleChromeHide();
+}
+
+$effect(() => {
+	scheduleChromeHide();
+	return () => {
 		if (hideTimer) clearTimeout(hideTimer);
-		hideTimer = setTimeout(() => { chromeVisible = false; }, delay);
+	};
+});
+
+// ── Fullscreen ────────────────────────────────────────────────────────────
+
+async function toggleFullscreen() {
+	await requestFullscreen(overlayEl);
+	fullscreen = isFullscreen();
+	if (fullscreen) {
+		await lockLandscape();
+	} else {
+		unlockOrientation();
 	}
+}
 
-	function showChrome(autoHide = true) {
-		chromeVisible = true;
-		if (autoHide) scheduleChromeHide();
+function handleFullscreenChange() {
+	fullscreen = isFullscreen();
+	if (!fullscreen) unlockOrientation();
+}
+
+// ── Playback controls ─────────────────────────────────────────────────────
+
+function togglePause() {
+	if (!videoEl) return;
+	if (videoEl.paused) {
+		videoEl.play().catch(() => {});
+	} else {
+		videoEl.pause();
 	}
+	showChrome();
+}
 
-	$effect(() => {
-		scheduleChromeHide();
-		return () => { if (hideTimer) clearTimeout(hideTimer); };
-	});
+function toggleMute() {
+	if (!videoEl) return;
+	videoEl.muted = !videoEl.muted;
+	showChrome();
+}
 
-	// ── Fullscreen ────────────────────────────────────────────────────────────
+function adjustVolume(delta: number) {
+	if (!videoEl) return;
+	videoEl.volume = Math.max(0, Math.min(1, videoEl.volume + delta));
+	showChrome();
+}
 
-	async function toggleFullscreen() {
-		await requestFullscreen(overlayEl);
-		fullscreen = isFullscreen();
-		if (fullscreen) {
-			await lockLandscape();
+async function requestPiP() {
+	if (!videoEl) return;
+	try {
+		if (document.pictureInPictureElement) {
+			await document.exitPictureInPicture();
 		} else {
-			unlockOrientation();
+			await videoEl.requestPictureInPicture();
 		}
+	} catch {
+		/* not supported */
+	}
+}
+
+// ── Touch gestures ────────────────────────────────────────────────────────
+
+const SWIPE_THRESHOLD = 55;
+const TAP_MAX_MOVE = 12;
+const TAP_MAX_MS = 300;
+
+function handleTouchStart(e: TouchEvent) {
+	const t = e.touches[0];
+	touchStartX = t.clientX;
+	touchStartY = t.clientY;
+	touchStartTime = Date.now();
+	touchStartVol = videoEl?.volume ?? 1;
+	isSeeking = false;
+}
+
+function handleTouchMove(e: TouchEvent) {
+	const t = e.touches[0];
+	const dx = t.clientX - touchStartX;
+	const dy = t.clientY - touchStartY;
+
+	// Vertical swipe on right half = volume
+	if (
+		Math.abs(dy) > 20 &&
+		Math.abs(dy) > Math.abs(dx) * 1.5 &&
+		touchStartX > window.innerWidth * 0.5
+	) {
+		e.preventDefault();
+		isSeeking = true;
+		const deltaVol = -(dy / 150);
+		const newVol = Math.max(0, Math.min(1, touchStartVol + deltaVol));
+		if (videoEl) videoEl.volume = newVol;
+		volumeIndicator = Math.round(newVol * 100);
+		if (volIndicatorTimer) clearTimeout(volIndicatorTimer);
+		volIndicatorTimer = setTimeout(() => {
+			volumeIndicator = null;
+		}, 1200);
 	}
 
-	function handleFullscreenChange() {
-		fullscreen = isFullscreen();
-		if (!fullscreen) unlockOrientation();
-	}
-
-	// ── Touch gestures ────────────────────────────────────────────────────────
-
-	const SWIPE_THRESHOLD = 55;
-	const TAP_MAX_MOVE = 12;
-	const TAP_MAX_MS = 300;
-
-	function handleTouchStart(e: TouchEvent) {
-		const t = e.touches[0];
-		touchStartX = t.clientX;
-		touchStartY = t.clientY;
-		touchStartTime = Date.now();
-		touchStartVol = videoEl?.volume ?? 1;
-		isSeeking = false;
-	}
-
-	function handleTouchMove(e: TouchEvent) {
-		const t = e.touches[0];
-		const dx = t.clientX - touchStartX;
-		const dy = t.clientY - touchStartY;
-
-		// Vertical swipe on right half = volume
-		if (Math.abs(dy) > 20 && Math.abs(dy) > Math.abs(dx) * 1.5 && touchStartX > window.innerWidth * 0.5) {
-			e.preventDefault();
-			isSeeking = true;
-			const deltaVol = -(dy / 150);
-			const newVol = Math.max(0, Math.min(1, touchStartVol + deltaVol));
-			if (videoEl) videoEl.volume = newVol;
-			volumeIndicator = Math.round(newVol * 100);
-			if (volIndicatorTimer) clearTimeout(volIndicatorTimer);
-			volIndicatorTimer = setTimeout(() => { volumeIndicator = null; }, 1200);
-		}
-
-		// Horizontal swipe hint
-		if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-			swipeHint = dx < 0 ? 'left' : 'right';
-		} else {
-			swipeHint = null;
-		}
-	}
-
-	function handleTouchEnd(e: TouchEvent) {
-		const t = e.changedTouches[0];
-		const dx = t.clientX - touchStartX;
-		const dy = t.clientY - touchStartY;
-		const dt = Date.now() - touchStartTime;
+	// Horizontal swipe hint
+	if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+		swipeHint = dx < 0 ? 'left' : 'right';
+	} else {
 		swipeHint = null;
+	}
+}
 
-		if (isSeeking) { isSeeking = false; return; }
+function handleTouchEnd(e: TouchEvent) {
+	const t = e.changedTouches[0];
+	const dx = t.clientX - touchStartX;
+	const dy = t.clientY - touchStartY;
+	const dt = Date.now() - touchStartTime;
+	swipeHint = null;
 
-		const moved = Math.hypot(dx, dy);
+	if (isSeeking) {
+		isSeeking = false;
+		return;
+	}
 
-		// Tap — toggle chrome
-		if (moved < TAP_MAX_MOVE && dt < TAP_MAX_MS) {
-			if (chromeVisible) {
-				chromeVisible = false;
-				if (hideTimer) clearTimeout(hideTimer);
-			} else {
-				showChrome();
+	const moved = Math.hypot(dx, dy);
+
+	// Tap — toggle chrome
+	if (moved < TAP_MAX_MOVE && dt < TAP_MAX_MS) {
+		if (chromeVisible) {
+			chromeVisible = false;
+			if (hideTimer) clearTimeout(hideTimer);
+		} else {
+			showChrome();
+		}
+		return;
+	}
+
+	// Horizontal swipe — channel zap
+	if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.5) {
+		vibrate(18);
+		if (dx < 0) {
+			onnext();
+		} else {
+			onprev();
+		}
+	}
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────
+
+function handleKeydown(e: KeyboardEvent) {
+	switch (e.key) {
+		case 'Escape':
+			if (fullscreen && isFullscreen()) {
+				document.exitFullscreen?.();
+				return;
 			}
-			return;
-		}
-
-		// Horizontal swipe — channel zap
-		if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy) * 1.5) {
-			vibrate(18);
-			if (dx < 0) {
-				onnext();
-			} else {
-				onprev();
-			}
-		}
+			onclose();
+			break;
+		case 'ArrowLeft':
+			e.preventDefault();
+			showChrome();
+			onprev();
+			break;
+		case 'ArrowRight':
+			e.preventDefault();
+			showChrome();
+			onnext();
+			break;
+		case 'ArrowUp':
+			e.preventDefault();
+			adjustVolume(0.1);
+			break;
+		case 'ArrowDown':
+			e.preventDefault();
+			adjustVolume(-0.1);
+			break;
+		case 'f':
+		case 'F':
+			onfavorite(channel.id);
+			break;
+		case 'm':
+		case 'M':
+			toggleMute();
+			break;
+		case ' ':
+			e.preventDefault();
+			togglePause();
+			break;
 	}
+}
 
-	// ── Keyboard ──────────────────────────────────────────────────────────────
-
-	function handleKeydown(e: KeyboardEvent) {
-		switch (e.key) {
-			case 'Escape':
-				if (fullscreen && isFullscreen()) { document.exitFullscreen?.(); return; }
-				onclose();
-				break;
-			case 'ArrowLeft':
-				e.preventDefault();
-				onprev();
-				break;
-			case 'ArrowRight':
-				e.preventDefault();
-				onnext();
-				break;
-			case 'f':
-			case 'F':
-				onfavorite(channel.id);
-				break;
-			case ' ':
-				e.preventDefault();
-				showChrome();
-				break;
-		}
-	}
-
-	function qualityLabel(): string {
-		if (!activeStream) return '';
-		if (activeStream.quality) return activeStream.quality.toUpperCase();
-		if (activeStream.label) return activeStream.label;
-		return `${streamIndex + 1}/${channel.streams.length}`;
-	}
+function qualityLabel(): string {
+	if (!activeStream) return '';
+	if (activeStream.quality) return activeStream.quality.toUpperCase();
+	if (activeStream.label) return activeStream.label;
+	return `${streamIndex + 1}/${channel.streams.length}`;
+}
 </script>
 
 <svelte:window onkeydown={handleKeydown} onfullscreenchange={handleFullscreenChange} />
@@ -257,6 +394,7 @@
 	aria-label="Video player"
 	aria-modal="true"
 	tabindex="-1"
+	use:focusTrap
 	onmousemove={() => showChrome()}
 	ontouchstart={handleTouchStart}
 	ontouchmove={handleTouchMove}
@@ -323,7 +461,7 @@
 	<div
 		class="chrome"
 		class:hidden={!chromeVisible}
-		role="toolbar"
+		role="group"
 		aria-label="Player controls"
 		onmouseenter={() => { chromeVisible = true; if (hideTimer) clearTimeout(hideTimer); }}
 		onmouseleave={() => scheduleChromeHide()}
@@ -353,11 +491,50 @@
 			</div>
 
 			<div class="controls">
-				<button class="ctrl-btn" aria-label="Previous channel" onclick={onprev}>
+				<button class="ctrl-btn" aria-label="Previous channel" disabled={!hasPrev} onclick={onprev}>
 					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<polyline points="15 18 9 12 15 6"/>
 					</svg>
 				</button>
+
+				<button class="ctrl-btn" aria-label={paused ? 'Play' : 'Pause'} onclick={togglePause}>
+					{#if paused}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+					{:else}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+					{/if}
+				</button>
+
+				<button class="ctrl-btn" aria-label="Next channel" disabled={!hasNext} onclick={onnext}>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<polyline points="9 18 15 12 9 6"/>
+					</svg>
+				</button>
+
+				<button class="ctrl-btn" aria-label={muted || volume === 0 ? 'Unmute' : 'Mute'} onclick={toggleMute}>
+					{#if muted || volume === 0}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+					{:else if volume < 0.5}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+					{:else}
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+					{/if}
+				</button>
+
+				<input
+					type="range"
+					class="vol-slider"
+					min="0" max="1" step="0.05"
+					value={volume}
+					oninput={(e) => { if (videoEl) videoEl.volume = parseFloat((e.currentTarget as HTMLInputElement).value); showChrome(); }}
+					aria-label="Volume"
+				/>
+
+				{#if 'pictureInPictureEnabled' in document}
+					<button class="ctrl-btn" aria-label="Picture in picture" onclick={requestPiP}>
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1"/></svg>
+					</button>
+				{/if}
 
 				<button
 					class="ctrl-btn"
@@ -367,12 +544,6 @@
 				>
 					<svg width="20" height="20" viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
 						<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-					</svg>
-				</button>
-
-				<button class="ctrl-btn" aria-label="Next channel" onclick={onnext}>
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-						<polyline points="9 18 15 12 9 6"/>
 					</svg>
 				</button>
 
@@ -655,8 +826,22 @@
 		color: var(--color-text);
 	}
 
+	.ctrl-btn:disabled {
+		opacity: 0.3;
+		cursor: default;
+		pointer-events: none;
+	}
+
 	.ctrl-btn.fav-active { color: var(--color-live); }
 	.close-ctrl { margin-left: 4px; }
+
+	.vol-slider {
+		width: 80px;
+		height: 3px;
+		accent-color: var(--color-text);
+		cursor: pointer;
+		flex-shrink: 0;
+	}
 
 	/* ── Tap hint ── */
 	.tap-hint {
@@ -698,6 +883,8 @@
 		.channel-name {
 			font-size: clamp(1rem, 5vw, 1.5rem);
 		}
+
+		.vol-slider { display: none; }
 	}
 
 	@media (max-height: 500px) and (orientation: landscape) {

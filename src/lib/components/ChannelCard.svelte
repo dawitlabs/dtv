@@ -1,46 +1,46 @@
 <script lang="ts">
-	import type { Channel } from '$lib/types.js';
+import type { Channel } from '$lib/types.js';
 
-	type Props = {
-		channel: Channel;
-		watching: boolean;
-		isFavorite: boolean;
-		onclick: () => void;
-		onfavorite: () => void;
-	};
+type Props = {
+	channel: Channel;
+	watching: boolean;
+	isFavorite: boolean;
+	onclick: () => void;
+	onfavorite: () => void;
+};
 
-	let { channel, watching, isFavorite, onclick, onfavorite }: Props = $props();
+let { channel, watching, isFavorite, onclick, onfavorite }: Props = $props();
 
-	let imgFailed = $state(false);
+let imgFailed = $state(false);
 
-	const initials = $derived(
-		channel.name
-			.split(/\s+/)
-			.filter(Boolean)
-			.slice(0, 2)
-			.map((w) => w[0].toUpperCase())
-			.join('')
-	);
+const initials = $derived(
+	channel.name
+		.split(/\s+/)
+		.filter(Boolean)
+		.slice(0, 2)
+		.map((w) => w[0].toUpperCase())
+		.join(''),
+);
 
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.preventDefault();
-			onclick();
-		}
+function handleKeydown(e: KeyboardEvent) {
+	if (e.key === 'Enter' || e.key === ' ') {
+		e.preventDefault();
+		onclick();
 	}
+}
 
-	function handleFavorite(e: MouseEvent) {
+function handleFavorite(e: MouseEvent) {
+	e.stopPropagation();
+	onfavorite();
+}
+
+function handleFavoriteKeydown(e: KeyboardEvent) {
+	if (e.key === 'Enter' || e.key === ' ') {
 		e.stopPropagation();
+		e.preventDefault();
 		onfavorite();
 	}
-
-	function handleFavoriteKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.stopPropagation();
-			e.preventDefault();
-			onfavorite();
-		}
-	}
+}
 </script>
 
 <div

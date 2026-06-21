@@ -1,54 +1,53 @@
 <script lang="ts">
-	type Program = {
-		title: string;
-		start: string;
-		stop: string;
-		description: string | null;
-	};
+type Program = {
+	title: string;
+	start: string;
+	stop: string;
+	description: string | null;
+};
 
-	type Props = {
-		channelId: string;
-	};
+type Props = {
+	channelId: string;
+};
 
-	let { channelId }: Props = $props();
+let { channelId }: Props = $props();
 
-	let programs = $state<Program[]>([]);
-	let loaded = $state(false);
+let programs = $state<Program[]>([]);
+let loaded = $state(false);
 
-	function formatTime(iso: string): string {
-		const d = new Date(iso);
-		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-	}
+function formatTime(iso: string): string {
+	const d = new Date(iso);
+	return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
-	const now = Date.now();
+const now = Date.now();
 
-	const current = $derived(
-		programs.find(
-			(p) => new Date(p.start).getTime() <= now && new Date(p.stop).getTime() > now
-		) ?? null
-	);
+const current = $derived(
+	programs.find(
+		(p) =>
+			new Date(p.start).getTime() <= now && new Date(p.stop).getTime() > now,
+	) ?? null,
+);
 
-	const upcoming = $derived(
-		programs
-			.filter((p) => new Date(p.start).getTime() > now)
-			.slice(0, 2)
-	);
+const upcoming = $derived(
+	programs.filter((p) => new Date(p.start).getTime() > now).slice(0, 2),
+);
 
-	$effect(() => {
-		const id = channelId;
-		loaded = false;
-		programs = [];
+$effect(() => {
+	const id = channelId;
+	loaded = false;
+	programs = [];
 
-		fetch(`/api/epg?channelId=${encodeURIComponent(id)}`)
-			.then((r) => r.json())
-			.then((data: { programs: Program[] }) => {
-				programs = data.programs ?? [];
-				loaded = true;
-			})
-			.catch(() => {
-				loaded = true;
-			});
-	});
+	fetch(`/api/epg?channelId=${encodeURIComponent(id)}`)
+		.then((r) => r.json())
+		.then((data: { programs: Program[] }) => {
+			programs = data.programs ?? [];
+			loaded = true;
+		})
+		.catch(() => {
+			loaded = true;
+		});
+});
 </script>
 
 {#if loaded && (current || upcoming.length > 0)}

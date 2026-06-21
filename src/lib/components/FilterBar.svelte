@@ -1,31 +1,37 @@
 <script lang="ts">
-	import type { FilterOptions } from '$lib/types.js';
+import type { FilterOptions } from '$lib/types.js';
 
-	type Filters = {
-		country: string;
-		category: string;
-		language: string;
-	};
+type Filters = {
+	country: string;
+	category: string;
+	language: string;
+};
 
-	type Props = {
-		filters: Filters;
-		options: FilterOptions | null;
-		onchange: (filters: Filters) => void;
-	};
+type Props = {
+	filters: Filters;
+	options: FilterOptions | null;
+	onchange: (filters: Filters) => void;
+};
 
-	let { filters, options, onchange }: Props = $props();
+let { filters, options, onchange }: Props = $props();
 
-	function setCategory(id: string) {
-		onchange({ ...filters, category: id });
-	}
+function setCategory(id: string) {
+	onchange({ ...filters, category: id });
+}
 
-	function setCountry(e: Event) {
-		onchange({ ...filters, country: (e.currentTarget as HTMLSelectElement).value });
-	}
+function setCountry(e: Event) {
+	onchange({
+		...filters,
+		country: (e.currentTarget as HTMLSelectElement).value,
+	});
+}
 
-	function setLanguage(e: Event) {
-		onchange({ ...filters, language: (e.currentTarget as HTMLSelectElement).value });
-	}
+function setLanguage(e: Event) {
+	onchange({
+		...filters,
+		language: (e.currentTarget as HTMLSelectElement).value,
+	});
+}
 </script>
 
 <div class="filter-bar">
