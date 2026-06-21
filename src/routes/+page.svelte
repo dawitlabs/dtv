@@ -7,7 +7,7 @@ import ChannelGrid from '$lib/components/ChannelGrid.svelte';
 import EmptyState from '$lib/components/EmptyState.svelte';
 import FilterBar from '$lib/components/FilterBar.svelte';
 import HomeView from '$lib/components/HomeView.svelte';
-import type SearchBar from '$lib/components/SearchBar.svelte';
+import SearchBar from '$lib/components/SearchBar.svelte';
 import { catalog } from '$lib/state/catalog.svelte';
 import { library } from '$lib/state/library.svelte';
 import { player } from '$lib/state/player.svelte.js';
