@@ -12,15 +12,17 @@ let { children } = $props()
 let miniVideoEl = $state<HTMLVideoElement | null>(null)
 const isHome = $derived($page.url.pathname === '/')
 
+// $effect runs only on the client — safe to touch document here
+$effect(() => {
+  document.documentElement.setAttribute('data-theme', settings.settings.theme)
+})
+$effect(() => {
+  locale.set(settings.settings.locale)
+})
+
 onMount(() => {
   settings.init()
   library.init()
-  $effect(() => {
-    document.documentElement.setAttribute('data-theme', settings.settings.theme)
-  })
-  $effect(() => {
-    locale.set(settings.settings.locale)
-  })
 })
 
 const navItems = [
